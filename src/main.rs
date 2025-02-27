@@ -18,7 +18,7 @@ fn regex_to_nda(inp: &str) -> NDA {
 
 
 fn main() {
-    let mut nda = regex_to_nda("abc(d|e)!+");
+    let mut nda = regex_to_nda("abc([a-c]|ba)!+");
     nda.extend(regex_to_nda("(ye)*|no"));
     println!("{}", nda.get_dot_script());
 }

@@ -8,21 +8,74 @@ use crate::regex::{Regexpr, Pattern, Term};
 #[derive(Default)]
 pub struct NDAState {
     pub end: u16,
-    pub next: BTreeMap<Term, BTreeSet<usize>>
+    pub next: HashMap<Option<BTreeSet<char>>, BTreeSet<usize>>
 
 }
+
+
+impl NDAState {
+
+    // Create Map with disjunctive Transition Terms
+    // The character Sets for each transition should have no overlapping elements
+    pub fn transition(&mut self, insert_term: Term, insert_targets: BTreeSet<usize>) {
+
+        // collect overlapping Terms
+        let conflicts: Vec<_> = self.next.iter().filter(
+            |(t, _)| t.as_ref().map_or(false, |chars| chars.iter().any(|c| insert_term.chars.contains(c))))
+                                                    .map(|(t,s)| (t.clone().unwrap(), s.clone())).collect();
+
+        // remove overlapping Transitions
+        self.next.retain(|t1,_| !conflicts.iter().any(|(t2,_)| t1.as_ref().map_or(false, |t1|t1==t2)));
+
+        let mut insert_chars = insert_term.chars;
+        // create disjunctive transitions
+        for (char_set, mut targets) in conflicts {
+            let intersection: BTreeSet<char> = char_set.intersection(&insert_chars).cloned().collect();
+            let difference: BTreeSet<char> = char_set.difference(&insert_chars).cloned().collect();
+
+            let (exclude, include) = if insert_term.negate {
+                (intersection, difference)
+            } else {
+                (difference, intersection)
+            };
+
+            self.next.insert(Some(exclude), targets.clone());
+            targets.extend(insert_targets.clone());
+            self.next.insert(Some(include), targets);
+
+            insert_chars.retain(|i| !char_set.contains(i)); // continue with others
+        }
+
+        // insert rest
+        // FIXME if NonGroup add to all others
+        if !insert_chars.is_empty() {
+            self.next.insert(Some(insert_chars),
+                    if insert_term.negate {
+                        self.next.get(&None).cloned().unwrap_or_default()
+                    } else {
+                        insert_targets.clone()
+                    });
+        }
+
+        // combine with all negated targets
+        if insert_term.negate {
+            self.next.entry(None).or_default().extend(insert_targets);
+        }
+    }
+}
+
 pub struct NDA {
     states: Vec<NDAState>,
     start: HashSet<usize>
 }
 
-impl std::fmt::Display for Term {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Term::NSet(set) => write!(f, "[^{:?}]", set),
-            Term::Set(set) => write!(f, "[{:?}]", set),
-            Term::Char(c) => write!(f, "{}", c)
-        }
+fn set_to_string(set: BTreeSet<char>) -> String {
+    let content = set.iter().fold(String::new(), |acc, i| acc+&i.to_string());
+    if set.len()==1 {
+        content
+    } else {
+        format!("[{}]", content)
+
     }
 }
 
@@ -40,10 +93,9 @@ impl NDA {
                 self.states.push(NDAState::default());
 
                 // connect all prevoius EndStates to new State via <t> Terminal
-                prev_ends.iter().for_each(|&i: &usize| {
-                              self.states.get_mut(i) .unwrap()
-                                     .next.entry(t.clone()).or_default().insert(state_idx);});
-
+                prev_ends.iter().for_each(|&i| {
+                    self.states.get_mut(i).unwrap().transition(t.clone(), BTreeSet::from([state_idx]));
+                });
                 HashSet::from([state_idx])
             }
             Pattern::Or(a, b) => {
@@ -95,37 +147,6 @@ impl NDA {
     }
 
 
-    // Create Map with disjunctive Transition Terms
-    // The character Sets for each transition should have no overlapping elements
-    fn disjunct_terms(transitions: BTreeMap<Term, BTreeSet<usize>>) -> BTreeMap<Term, BTreeSet<usize>> {
-        transitions.into_iter().fold(HashMap::new(), |mut acc, (term_insert, target_insert)| {
-
-            let check_for = term_insert.get_chars();
-
-            // collect intersecting Terms
-            let mut intersections: Vec<_> = acc.iter().filter(
-                |pair| pair.0.get_chars().iter().any(|c| check_for.contains(c))).collect();
-
-            if intersections.is_empty() {
-                acc.insert(term_insert, target_insert);
-            } else {
-
-                // remove intersecting Transitions
-                acc.retain(|(t1,_)| !intersections.iter().any(|(t2,_)| t1==t2));
-
-                // create disjunctive transitions
-                for (term, target) in intersections {
-                    match term_insert {
-                        Term::Char(c) => {
-                            acc.insert(key, value)
-                        }
-                    }
-                }
-            }
-
-        })
-    }
-
     pub fn new(regex: Pattern) -> NDA {
 
         // create NDA with single start state <0>
@@ -165,7 +186,8 @@ impl NDA {
         let transitions = states.fold(String::new(), |acc, state_idx|{
             let state_next = &self.states.get(state_idx).unwrap().next;
             acc + &state_next.iter().fold(String::new(), |acc, (term, targets)|{
-                acc + &targets.iter().fold("".to_owned(), |s, t| s+&format!("{} -> {} [label=\"{}\"]", state_idx, t, term) + "\n")
+                acc + &targets.iter().fold("".to_owned(), |s, t| s+&format!("{} -> {} [label=\"{}\"]", state_idx, t,
+                                                                            term.clone().map_or(String::from("<otherwise>"), |t| set_to_string(t))) + "\n")
             }) + "\n"
         });
 
@@ -204,10 +226,12 @@ pub struct DFA {
     start: usize
 }
 
-impl DFA {
+// TODO disjunctive_transition in DFA
+
+// impl DFA {
 
 
-    pub fn new(nda: NDA) -> DFA {
+//     pub fn new(nda: NDA) -> DFA {
 
-    }
-}
+//     }
+// }
